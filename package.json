@@ -1,0 +1,26 @@
+{
+  "name": "wolt-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Wolt — venue search, menu lookup, cart management, and order placement",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "wolt-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
