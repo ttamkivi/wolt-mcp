@@ -1,169 +1,189 @@
-# wolt-mcp
+# wolt-mcp v0.7
 
-A clean MCP server for Wolt — venue search, menu lookup, delivery addresses, and order placement. Pairs with Claude Desktop, Claude Code, or any MCP-aware client.
+MCP server for Wolt food delivery. Inspired by [martparve/selver-mcp](https://github.com/martparve/selver-mcp).
 
-Built on top of the (unofficial) Wolt JSON API. **Personal use only** — Wolt does not publish a public API; this MCP wraps the same endpoints the Wolt website uses, with your own session token.
+> **History note (23.08.2026):** this repo briefly forked into two directions — a
+> TypeScript rewrite mirroring selver-mcp's structure (`git checkout
+> ts-rewrite-attempt`), and this Python implementation, developed in parallel in
+> `~/Downloads/wolt-mcp` and actually wired into Claude Desktop. The Python side
+> won on capability (venues, menu, orders, baskets, payment methods, checkout
+> prep, audit log) and is now the canonical copy, moved here from Downloads. The
+> TS attempt is preserved on its branch, not deleted, in case it's worth
+> resuming later.
 
-## What it does
+**v0.1**: anonymous tools — search venues, browse menus, virtual cart, deeplink.
+**v0.2**: authenticated tools — order history, payment methods, pickup slots, place pickup orders (two-step dry-run/confirm).
+**v0.3 adds**: home delivery — saved addresses (pre-seeded with Salv office at Veerenni 38), delivery slots, place_delivery_order, default payment method.
 
-- **Find venues** by name or cuisine near you
-- **Browse menus** by venue oid
-- **Item search** across nearby venues with optional max price
-- **Read your saved delivery addresses** (from your Wolt account)
-- **Place an order** — irreversible, requires explicit confirmation in chat
+> ⚠️ **Order placement violates Wolt's Terms of Service** in the strict sense (automated/programmatic access). Use sparingly: pickup-only, low volume (a few orders a week), and always confirm the dry-run output before submitting. Mitigation: every `place_pickup_order` call defaults to `dry_run=True` and refuses to submit without a matching `confirm_token`.
 
-## Architecture
+## Tools
 
-```
-src/
-  index.ts           ← MCP server entry (stdio transport)
-  wolt/
-    client.ts        ← WoltClient — port of ostja-bot/wolt.py with typed responses
-    types.ts         ← Venue, MenuItem, SearchItem, DeliveryAddress, OrderResult
-  storage/
-    session-token.ts ← persists JWT at ~/.wolt-mcp/session.json (chmod 600)
-  tools/
-    search.ts        ← search_venues, get_venue_menu, search_items
-    session.ts       ← set_session, get_session_status, clear_session
-    address.ts       ← list_delivery_addresses, get_default_delivery_address, set_search_location
-    order.ts         ← place_order (irreversible, gated by skill prompt)
-skills/
-  wolt-order/SKILL.md ← workflow + confirmation discipline
-```
+### Anonymous (no session needed)
+- **search_venues(query, lat, lon, max_estimate_min)** — find open restaurants
+- **get_venue(slug)** — venue details
+- **get_venue_menu(slug)** — full menu with options
+- **find_items(slug, query)** — search a venue's menu
+- **add_to_cart / view_cart / remove_from_cart / clear_cart** — local virtual cart
+- **get_deeplink(slug?)** — Wolt web/app deeplink
+
+### Authenticated (requires `set_session` first)
+- **set_session(token, kind="bearer")** — save your Wolt JWT or cookie
+- **get_session_status()** — check if a token is saved
+- **get_my_orders(limit, days_back)** — order history. Use this to compute favorites in the agent.
+- **get_payment_methods()** — your saved cards
+- **set_default_payment_method(payment_method_id)** — save a default card
+- **get_pickup_slots(slug, date_iso)** — when can you pick up
+- **place_pickup_order(...)** — submit pickup order (two-step: dry_run → confirm_token)
+
+### Delivery (v0.3)
+- **set_delivery_address(label, address, lat, lon, floor?, instructions?, set_default?)** — save a named address
+- **get_delivery_address(label?)** — fetch a saved address (default if no label)
+- **list_delivery_addresses()** — see all saved addresses
+- **get_delivery_slots(slug, date_iso?, address_label?)** — delivery times for a venue → address
+- **place_delivery_order(slug, items, delivery_time_iso, payment_method_id?, address_label?, dry_run, confirm_token)** — submit delivery order (two-step)
+
+Pre-seeded address: `salv-office` → Veerenni 38, Tallinn. To use a different default, call `set_delivery_address(... set_default=True)`.
 
 ## Install
 
-### 1. Prerequisites
-
-- Node.js 18+ (`node --version`)
-- A Wolt account with a recent web/app session (to extract a JWT)
-
-### 2. Build
-
 ```bash
-cd ~/Desktop/Personal-Brain/wolt-mcp
-npm install
-npm run build
+unzip wolt-mcp.zip && cd wolt-mcp
+pip install -e .       # or: uv pip install -e .
+python wolt_mcp.py     # sanity check — Ctrl-C to exit
 ```
 
-This produces `dist/index.js`.
-
-### 3. Wire into Claude Desktop
-
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` and add a `wolt-mcp` entry under `mcpServers`:
+Wire into Claude Desktop. Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "wolt-mcp": {
-      "command": "node",
-      "args": ["/Users/YOUR_NAME/Desktop/Personal-Brain/wolt-mcp/dist/index.js"]
+    "wolt": {
+      "command": "python",
+      "args": ["/absolute/path/to/wolt-mcp/wolt_mcp.py"]
     }
   }
 }
 ```
 
-Quit and reopen Claude Desktop.
+Restart Claude Desktop.
 
-### 4. Wire into Claude Code (alternative)
+## Get your Wolt session token
 
-```bash
-claude mcp add wolt-mcp node ~/Desktop/Personal-Brain/wolt-mcp/dist/index.js
+**Recommended: cookie mode — set it up once, it renews itself.**
+
+1. Open `https://wolt.com` in Chrome, log in.
+2. Open DevTools (Cmd+Opt+I) → **Network** tab.
+3. Click any restaurant or refresh the page so requests appear.
+4. Click any request to `consumer-api.wolt.com`.
+5. **Headers** → **Request Headers** → find the `cookie:` line.
+6. Copy the **entire value** (it's long — includes `__wtoken`, `__wrtoken`, and others).
+
+In Claude Desktop:
+
+> Save this Wolt cookie session: `<paste the full cookie: value>`
+
+Claude calls `set_session(token="<cookie string>", kind="cookie")`.
+
+From then on, every authenticated call captures whatever `Set-Cookie` rotation
+Wolt sends back (the same mechanism that keeps a real browser tab logged in)
+and persists it to `~/.wolt-mcp/session.json` (mode 600, owner-only). Check
+`get_session_status()` — a cookie-mode session reports `"mode":
+"self-renewing"` and a `last_renewed_at` timestamp. You should only need to
+repeat this whole procedure if a call starts returning 401, which means
+`__wrtoken` itself (not just the short-lived access cookie) finally expired.
+
+**Legacy: bearer mode.** Grab just the `authorization: Bearer ey...` header
+instead and call `set_session(token="ey...")` (kind defaults to `"bearer"`).
+This JWT is short-lived and does **not** self-renew — you'll be back here
+re-extracting it every time it expires, which is the whole reason cookie
+mode exists. Prefer cookie mode unless you have a specific reason not to.
+
+## Use it — favorites + pickup order flow
+
+```
+You: What are my Wolt favorites — top venues and most-ordered items?
+
+Claude: [calls get_my_orders(limit=200)]
+        [groups by venue and item, counts, computes patterns]
+
+        Top venues (last 12 months):
+          Vapiano — 14 orders, avg 18.50€
+          Tokyo — 9 orders, avg 22.10€
+          Lendav Taldrik — 7 orders, avg 16.80€
+
+        Most-ordered items:
+          Pollo e Funghi (Vapiano) — 8x
+          Spicy Tuna Roll 8pc (Tokyo) — 6x
+          ...
+
+You: Order me lunch from Vapiano tomorrow, pickup at 12:30. Usual.
+
+Claude: [checks calendar via google-calendar MCP]
+        Tomorrow 11:00–14:00 you're at Salv office. ✓
+
+        [calls get_payment_methods → picks default Visa ****1234]
+        [calls get_pickup_slots(slug='vapiano-tallinn', date='2026-04-28')]
+          → 12:15, 12:30, 12:45 available
+        [calls add_to_cart with Pollo e Funghi]
+        [calls place_pickup_order(... dry_run=True ...)]
+
+        Planned order at Vapiano:
+          1× Pollo e Funghi — 12.50€
+          1× San Pellegrino 0.33L — 3.00€
+        Subtotal: 15.50€  • Pickup 12:30  • Visa ****1234
+
+        Confirm? Say "submit" to place it.
+
+You: Submit.
+
+Claude: [calls place_pickup_order(... dry_run=False, confirm_token='8996...')]
+        ✓ Order placed. Pickup at 12:30, Vapiano (Vabaduse väljak 8).
 ```
 
-### 5. Install the order skill (recommended)
+## Calendar awareness
 
-```bash
-mkdir -p ~/.claude/skills/wolt-order
-cp ~/Desktop/Personal-Brain/wolt-mcp/skills/wolt-order/SKILL.md ~/.claude/skills/wolt-order/SKILL.md
+If you have Google Calendar MCP connected, ask Claude to check before ordering:
+
+> "Check my calendar for tomorrow afternoon — am I in Tallinn at the office? If yes, order pickup lunch from my favorite Vapiano dish at 12:30."
+
+Claude will call `list_events` first, confirm location, then proceed with the order flow.
+
+## Cart state
+
+- `~/.wolt-mcp/cart.json` — virtual cart (anonymous flow)
+- `~/.wolt-mcp/session.json` — your token (mode 600)
+
+One venue at a time in the cart. Adding from a different venue resets it.
+
+## Limitations
+
+- **No nutrition macros.** Wolt menus don't expose kcal/protein. Claude estimates from item names.
+- **Endpoint stability.** Authenticated endpoints are reverse-engineered from the Wolt web app. If `get_my_orders` or `place_pickup_order` returns a weird error, the URL or payload shape may have changed. Open DevTools, capture a real request, and adjust `WoltClient.my_orders` / `WoltClient.place_order` accordingly.
+- **TOS risk.** As above. Pickup-only and low volume keeps risk down.
+- **Pickup support varies.** Not all venues offer takeaway. `get_pickup_slots` will return `[]` if pickup isn't enabled.
+- **Geo defaults to Tallinn.** Pass `lat`/`lon` for Helsinki (60.1699, 24.9384), Stockholm (59.3293, 18.0686), etc.
+
+## Troubleshooting
+
+**"No Wolt session token saved"** → run `set_session(token=...)` first.
+
+**401 Unauthorized** → token expired. Re-extract from DevTools and `set_session` again.
+
+**403 Forbidden on anonymous endpoints** → Cloudflare bot detection. Reduce request rate, ensure User-Agent header is set (it is by default).
+
+**`place_pickup_order` returns 4xx with strange error** → Wolt may have changed the order endpoint. Capture a real takeaway order via DevTools, compare URL + payload to `WoltClient.place_order`, and adjust.
+
+## Repo layout
+
 ```
-
-The skill teaches Claude how to do the search-propose-confirm-place dance correctly. Without it, Claude can still call individual tools, but you'd need to manage confirmation in your prompt.
-
-## First-time setup — get a session token
-
-Wolt's tokens are JWTs found in browser localStorage / app storage after you sign in.
-
-1. Open https://wolt.com/ in Chrome and sign in.
-2. Open DevTools → Application → Local Storage → `https://wolt.com`.
-3. Find the entry with a long JWT (starts with `eyJ...`).
-4. Copy the token.
-5. In Claude, ask: "Save my Wolt session token: eyJ..."
-   The skill calls `set_session` and stores it at `~/.wolt-mcp/session.json` (chmod 600).
-
-Tokens typically expire in ~30 minutes for the access token, but Wolt's web flow auto-refreshes — for now, this MCP only stores the access token, so you'll need to repeat this when it expires. Refresh-token support is a future enhancement.
-
-## Usage
-
-> "Find me a burger under €12 on Wolt"
-
-Claude will call `search_items` and show 3 options.
-
-> "Order option 1"
-
-Claude will fetch your delivery address, summarize the order with total price, and ask you to confirm. After "yes", it calls `place_order`.
-
-> "What's my Wolt session status?"
-
-Claude calls `get_session_status` — shows token validity and expiry.
-
-## Tools reference
-
-| Tool | Auth | Description |
-|---|---|---|
-| `search_venues` | optional | Search venues by query, returns up to 5 |
-| `get_venue_menu` | optional | Fetch menu by venue oid |
-| `search_items` | optional | Combined: search venues then filter their menus |
-| `set_session` | — | Save JWT to `~/.wolt-mcp/session.json` |
-| `get_session_status` | — | Decode JWT locally, show expiry |
-| `clear_session` | — | Delete saved JWT |
-| `list_delivery_addresses` | required | All saved Wolt addresses |
-| `get_default_delivery_address` | required | First saved address |
-| `set_search_location` | — | Override search lat/lon for this session |
-| `place_order` | required | **Irreversible.** Place an order at one venue |
-
-## Why a separate MCP from `ostja-bot`?
-
-The original `ostja-bot/wolt.py` was part of a Telegram-fronted multi-store agent. Pulling it out as a standalone MCP gives:
-
-- **Reuse** — the same MCP works with Claude Desktop, Claude Code, Cowork, or any MCP host without dragging the Telegram bot along.
-- **Clean tool boundaries** — each operation is a separate MCP tool with a typed schema, instead of methods on a Python class.
-- **Token persistence on disk** rather than as a process-bound `.env`.
-- **TypeScript** — same toolchain as `selver-mcp`, single mental model for both groceries and food delivery.
-
-The original Python code is being retired — see migration note below.
-
-## Migration from ostja-bot/wolt.py
-
-If you have an old `ostja-bot/wolt.py`:
-
-```bash
-rm ~/Desktop/Personal-Brain/personal-developments/intel-fusion/ostja-bot/wolt.py
+wolt-mcp/
+├── wolt_mcp.py                       # the whole server, single file (~700 lines)
+├── pyproject.toml
+├── README.md
+└── claude_desktop_config.example.json
 ```
-
-The new MCP is a superset (search, menu, items, addresses, order) plus session management and JWT introspection.
-
-## Security notes
-
-- The JWT contains your Wolt account access. Treat `~/.wolt-mcp/session.json` like a password file — it's chmod 600 by default.
-- **Order placement moves money.** The MCP does not enforce confirmation by itself — the wrapping skill (`wolt-order/SKILL.md`) does, by instructing Claude to summarize + ask first. If you bypass the skill, you're responsible for confirmation.
-- This is an unofficial wrapper around Wolt's internal API. Wolt may rate-limit or block accounts that abuse it. Use at human-pace volumes.
-
-## Updating
-
-```bash
-cd ~/Desktop/Personal-Brain/wolt-mcp
-git pull          # if you've put it under version control
-npm install
-npm run build
-```
-
-Then quit and reopen Claude Desktop.
-
-## Uninstall
-
-Remove the `wolt-mcp` entry from `claude_desktop_config.json`, delete `~/Desktop/Personal-Brain/wolt-mcp`, and `rm ~/.wolt-mcp/session.json` to clear your saved token.
 
 ## License
 
-Personal use. No warranty. Wolt's TOS apply.
+MIT.

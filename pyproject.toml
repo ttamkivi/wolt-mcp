@@ -1,0 +1,23 @@
+[project]
+name = "wolt-mcp"
+version = "0.7.1"
+description = "MCP server for Wolt food delivery — search venues, browse menus, build cart, fetch order history, place pickup AND delivery orders"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # Upper-bounded on purpose: mcp 2.0.0 removed mcp.server.fastmcp
+    # (the exact import this file uses) without warning. Verified working
+    # range is 1.2.x-1.27.x; re-test before lifting this bound.
+    "mcp>=1.2.0,<2",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+wolt-mcp = "wolt_mcp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["wolt_mcp.py"]
