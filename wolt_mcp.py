@@ -239,7 +239,11 @@ def _token_ttl_seconds(s: Session) -> Optional[int]:
     exp = _decode_jwt_exp(s.token)
     if exp is None:
         return None
-    now = int(dt.datetime.utcnow().timestamp())
+    # dt.datetime.utcnow().timestamp() is a classic trap: .timestamp() treats
+    # a naive datetime as LOCAL time, so on any non-UTC machine (e.g. Estonia,
+    # UTC+3) this silently shifted every expiry check by the local offset —
+    # tokens looked hours healthier than they actually were.
+    now = int(dt.datetime.now(dt.timezone.utc).timestamp())
     return exp - now
 
 

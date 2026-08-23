@@ -38,6 +38,41 @@ class TestJWTDecoding(unittest.TestCase):
         self.assertIsNone(W._decode_jwt_exp("only_one_segment"))
 
 
+class TestTokenTTL(unittest.TestCase):
+    """_token_ttl_seconds must use real UTC, not local-time-mislabeled-as-UTC.
+
+    Regression for a bug where dt.datetime.utcnow().timestamp() silently
+    shifted every expiry check by the machine's local offset (e.g. +3h on
+    a UTC+3 box) — a token expiring in 22 minutes was reported as having
+    203 minutes left.
+    """
+
+    @staticmethod
+    def _make_jwt(exp: int) -> str:
+        import base64
+        header = base64.urlsafe_b64encode(b'{"alg":"ES256"}').rstrip(b"=").decode()
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"exp": exp}).encode()
+        ).rstrip(b"=").decode()
+        return f"{header}.{payload}.fakesig"
+
+    def test_ttl_matches_wall_clock_regardless_of_local_timezone(self):
+        real_now = dt.datetime.now(dt.timezone.utc).timestamp()
+        token = self._make_jwt(exp=int(real_now) + 1800)  # expires in 30 min
+        sess = W.Session(token=token, kind="bearer")
+        ttl = W._token_ttl_seconds(sess)
+        # Must be close to 1800s. The old bug reported ~1800 + 3600*local_offset_hours.
+        self.assertLess(abs(ttl - 1800), 5, f"ttl={ttl}, expected ~1800")
+
+    def test_expired_token_reports_negative_ttl(self):
+        real_now = dt.datetime.now(dt.timezone.utc).timestamp()
+        token = self._make_jwt(exp=int(real_now) - 1800)  # expired 30 min ago
+        sess = W.Session(token=token, kind="bearer")
+        ttl = W._token_ttl_seconds(sess)
+        self.assertLess(ttl, 0)
+        self.assertLess(abs(ttl - (-1800)), 5, f"ttl={ttl}, expected ~-1800")
+
+
 class TestCookieParsing(unittest.TestCase):
     """Verify telemetry UUIDs are extracted from cookie strings."""
 
